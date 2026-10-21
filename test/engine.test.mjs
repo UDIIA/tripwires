@@ -7,7 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { evaluate, loadRules, normalizeInput, denialJson, allowFile } from '../src/engine.mjs';
 import { loadConfig } from '../src/config.mjs';
-import { readLog } from '../src/log.mjs';
+import { readLog, record } from '../src/log.mjs';
+import { peek } from '../src/peek.mjs';
 import { buildReport, renderReport } from '../src/report.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -53,7 +54,10 @@ test('TRIPWIRES_ALLOW token and the one-shot allow file pass once and are logged
   assert.equal((await go('ls')).rule, 'always-denies');
   assert.equal(await go('TRIPWIRES_ALLOW=always-denies ls'), null);
   assert.equal(await go('TRIPWIRES_ALLOW=* ls'), null);
+  assert.equal(await go('export TRIPWIRES_ALLOW=always-denies; ls'), null);
   assert.equal(await go('TRIPWIRES_ALLOW=other ls') && 'denied', 'denied');
+  assert.equal((await go('ls # TRIPWIRES_ALLOW=always-denies')).rule, 'always-denies', 'a comment is not an override');
+  assert.equal((await go('ls "TRIPWIRES_ALLOW=always-denies"')).rule, 'always-denies', 'a string is not an override');
   const f = allowFile(state, 'always-denies');
   fs.mkdirSync(path.dirname(f), { recursive: true });
   fs.writeFileSync(f, JSON.stringify({ because: 'ship it, I checked', at: new Date().toISOString() }));
@@ -68,6 +72,49 @@ test('TRIPWIRES_ALLOW token and the one-shot allow file pass once and are logged
   assert.equal(rep.rules[0].id, 'always-denies');
   assert.equal(rep.rules[0].allows, 1);
   assert.match(renderReport(rep), /verdict: ______/);
+});
+
+test('a rule file that fails to load is reported and skipped; the others still run', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tripwires-broken-'));
+  fs.writeFileSync(path.join(dir, 'a-broken.mjs'), 'export default { this is not javascript');
+  fs.writeFileSync(path.join(dir, 'b-dup.mjs'), "export default { id: 'kill-by-name', title: 'dup', tools: ['Bash'], incident: 'x', check() { return null; } };");
+  fs.writeFileSync(path.join(dir, 'c-ok.mjs'), "export default { id: 'c-ok', title: 'ok', tools: ['Bash'], incident: 'x', check(i) { return /^touch-me$/.test(i.command) ? { reason: 'r', fix: 'f' } : null; } };");
+  const config = { off: new Set(), rules: [dir], failClosed: false, stateDir: tmp, sources: [], untrustedRules: [] };
+  const rules = await loadRules(config);
+  assert.equal(rules.errors.length, 2);
+  assert.match(rules.errors[0].file, /a-broken/);
+  assert.match(rules.errors[1].message, /duplicate rule id/);
+  assert.ok(rules.find((r) => r.id === 'c-ok'));
+  const r = await evaluate({ tool_name: 'Bash', tool_input: { command: 'touch-me' } }, { rules, config, log: false, platform: 'linux' });
+  assert.equal(r.rule, 'c-ok');
+  await assert.rejects(() => loadRules(config, { strict: true }));
+});
+
+test('project .tripwires.json cannot load rule code until the project is trusted; its off list applies anyway', async () => {
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'tripwires-proj-'));
+  fs.mkdirSync(path.join(proj, 'rules'));
+  fs.writeFileSync(path.join(proj, 'rules', 'evil.mjs'), "export default { id: 'evil', title: 'x', tools: ['*'], incident: 'x', check() { return null; } };");
+  fs.writeFileSync(path.join(proj, '.tripwires.json'), JSON.stringify({ rules: ['./rules'], off: ['kill-by-name'] }));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tripwires-home-'));
+  const userCfg = path.join(home, 'config.json');
+  // Simulate the user config through TRIPWIRES_CONFIG being absent: loadConfig reads USER_CONFIG from the real home,
+  // so this test drives the merge logic by calling loadConfig with a cwd and checking the untrusted bucket.
+  const cfg = loadConfig({ cwd: path.join(proj, 'sub'), env: {} });
+  fs.mkdirSync(path.join(proj, 'sub'), { recursive: true });
+  assert.ok(cfg.off.has('kill-by-name'));
+  assert.ok(!cfg.rules.some((p) => p.includes('evil') || p.endsWith('rules')) || cfg.trust.includes(proj.toLowerCase()), 'project rules not loaded without trust');
+  assert.ok(cfg.untrustedRules.some((p) => p.toLowerCase() === path.join(proj, 'rules').toLowerCase()) || cfg.trust.includes(path.resolve(proj).toLowerCase()));
+  fs.writeFileSync(userCfg, JSON.stringify({ trust: [proj] }));
+  const trusted = loadConfig({ cwd: proj, env: { TRIPWIRES_CONFIG: userCfg } });
+  // With TRIPWIRES_CONFIG the project file is not read at all (explicit config replaces both), so only the trust list is visible.
+  assert.ok(trusted.trust.includes(path.resolve(proj).toLowerCase()));
+});
+
+test('normalizeInput turns a Codex apply_patch into file + added text, not a shell command', () => {
+  const n = normalizeInput({ tool_name: 'apply_patch', tool_input: { command: '*** Begin Patch\n*** Add File: a/b.md\n+line one\n+line two\n*** End Patch' } });
+  assert.equal(n.command, '');
+  assert.equal(n.file, 'a/b.md');
+  assert.equal(n.text, 'line one\nline two');
 });
 
 test('the denial message names the rule, the reason, the fix and the override', async () => {
@@ -103,6 +150,39 @@ test('example house rules load through the config and fire', async () => {
   assert.equal(await evaluate({ tool_name: 'Bash', tool_input: { command: 'ffprobe in.mp4' } }, { rules, config, log: false, platform: 'linux' }), null);
   const paid = await evaluate({ tool_name: 'Bash', tool_input: { command: 'curl https://api.elevenlabs.io/v1/text-to-speech -d @x.json' } }, { rules, config, log: false, platform: 'linux' });
   assert.equal(paid.rule, 'paid-api-needs-the-persons-words');
+});
+
+test('log excerpts are redacted', () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'tripwires-redact-'));
+  process.env.TRIPWIRES_TEST = '';
+  record(state, { kind: 'deny', rule: 'x', excerpt: 'TOKEN=abcdefghijklmnopqrstuvwxyz0123 curl -H "Authorization: Bearer abcdefghijkl" https://alice:hunter2@example.com/x?api_key=zzz' });
+  process.env.TRIPWIRES_TEST = '1';
+  const row = readLog(state)[0];
+  assert.ok(!row.excerpt.includes('abcdefghijklmnopqrstuvwxyz0123'));
+  assert.ok(!row.excerpt.includes('abcdefghijkl'));
+  assert.ok(!row.excerpt.includes('hunter2'));
+  assert.ok(!row.excerpt.includes('zzz'));
+  assert.match(row.excerpt, /TOKEN=\*\*\*/);
+});
+
+test('peek prints shapes, not values: numbers, bearer tokens in structural keys, URL user info', () => {
+  const f = path.join(tmp, 'synthetic.json');
+  fs.writeFileSync(f, JSON.stringify({ pin: 123456, command: 'curl -H Authorization:Bearer-demo-secret-value', url: 'https://alice:demo-password@example.com/p', hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'node hook.mjs' }] }] }, theme: 'dark', api_key: 'sk-live-abcdefghijklmnop' }));
+  const out = peek(f);
+  assert.ok(!out.includes('123456'));
+  assert.ok(!out.includes('demo-secret'));
+  assert.ok(!out.includes('demo-password'));
+  assert.ok(!out.includes('alice'));
+  assert.ok(!out.includes('abcdefghijklmnop'));
+  assert.match(out, /host=example\.com/);
+  assert.match(out, /command = "node hook\.mjs"/, 'structural, harmless values still print');
+  assert.match(out, /theme = "dark"/);
+  const envFile = path.join(tmp, '.env');
+  fs.writeFileSync(envFile, 'PORT=3000\nDB_URL=postgres://u:p@db/x\nTOKEN=abcdefghijklmnopqrstuvwxyz\n');
+  const e = peek(envFile);
+  assert.match(e, /PORT = 3000/);
+  assert.ok(!e.includes('abcdefghijklmnopqrstuvwxyz'));
+  assert.ok(!e.includes('u:p@'));
 });
 
 test('hook entry point: denies through stdout JSON, lets unknown payloads through, fails open on garbage', () => {

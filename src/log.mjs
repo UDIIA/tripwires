@@ -2,10 +2,14 @@
 //
 //   { ts, ms, kind: "deny" | "allow" | "error", rule, tool, agent, session, excerpt }
 //
-// `ms` is the time from process start to the decision, Node start-up included: that is what the agent waits.
-// Test suites set TRIPWIRES_TEST=1 and nothing is written, so the weekly report only counts real sessions.
+// Only decisions are logged (a denial, an override, a rule or loader error); a call that passes every rule
+// writes nothing. `ms` is the time from process start to that decision, Node start-up included: it is what the
+// agent waited on that call, not the cost of one rule. Excerpts are redacted (tokens, passwords, URL
+// credentials) and cut at 200 characters. Test suites set TRIPWIRES_TEST=1 and nothing is written, so the
+// weekly report only counts real sessions.
 import fs from 'node:fs';
 import path from 'node:path';
+import { redact } from './shell.mjs';
 
 export function logPath(stateDir) {
   return path.join(stateDir, 'log.jsonl');
@@ -16,7 +20,8 @@ export function record(stateDir, entry) {
   try {
     fs.mkdirSync(stateDir, { recursive: true });
     const row = { ts: new Date().toISOString(), ms: Math.round(performance.now()), ...entry };
-    if (row.excerpt) row.excerpt = String(row.excerpt).replace(/\s+/g, ' ').slice(0, 200);
+    if (row.excerpt) row.excerpt = redact(String(row.excerpt).replace(/\s+/g, ' ')).slice(0, 200);
+    if (row.because) row.because = String(row.because).slice(0, 200);
     fs.appendFileSync(logPath(stateDir), JSON.stringify(row) + '\n');
   } catch {
     // logging never blocks the agent

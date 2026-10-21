@@ -19,9 +19,8 @@ The `inline-script-backslash` rule went in on 2026-10-04 at night. From then to 
 | denials | 403 |
 | sessions | 168 |
 | per day (median) | 22 |
-| retries after a denial that hit the same rule again | tracked by the report; the denial text names the fix, and the fix (write the script to a file) is the path the agent takes |
 
-Each of those 403 denials is a retry loop that did not happen. The rule is the most frequent one in the log by a factor of eight and has not had a "hurt" verdict since its second week, when it was narrowed to deny only when the delivered program text actually differs (inside double quotes `\\d` and `\d` arrive the same, and the first version denied those too).
+Each of those 403 denials is a command that did not run. Whether the agent then took the fix (write the script to a file) is not in the log; what is in the log is that the rule has not had a "hurt" verdict since its second week, when it was narrowed to deny only when the delivered program text actually differs (inside double quotes `\\d` and `\d` arrive the same, and the first version denied those too). It is the most frequent rule in the log by a factor of eight.
 
 ## The second wave (2026-10-12 to 2026-10-20)
 
@@ -54,5 +53,5 @@ Each matched tool call starts one Node process. See the measured numbers in the 
 ## Limits of this evidence
 
 - One developer, one machine, no control group. The "before" is a replay of transcripts, not a parallel run without hooks.
-- "Denials" count the hook firing, not the mistake being avoided; an agent could in principle give up on the task instead of taking the fix. The report's override and retry counts are the proxy for that, and the "hurt" verdicts are where the rule was the problem.
+- "Denials" count the hook firing, not the mistake being avoided; an agent could in principle give up on the task instead of taking the fix. The log does not record what the agent did next. The override count and the "hurt" verdicts in the weekly review are the only proxies, and they are read by a person.
 - Four of the eleven rules are Windows-only, because that is where the setup lives. The engine and the method are not.

@@ -80,7 +80,21 @@ const cases = [
   [null, run('ScheduleWakeup', { prompt: 'poll CI for the test results' })],
   // sed-inplace-on-crlf (candidate without disk access; see the fs test below)
   [null, bash('sed -n "s/a/b/p" file.txt')],
-  [null, bash('sed -i "s/a/b/" file.txt TRIPWIRES_ALLOW=sed-inplace-on-crlf')],
+  [null, bash('TRIPWIRES_ALLOW=sed-inplace-on-crlf sed -i "s/a/b/" file.txt')],
+  // review findings (2026-10-21): text is not code, code is not text
+  ['kill-by-name', bash('pkill -f node # TRIPWIRES_ALLOW=kill-by-name')],
+  ['kill-by-name', bash('echo "TRIPWIRES_ALLOW=kill-by-name"; pkill -f node')],
+  ['kill-by-name', bash('cat > notes.md <<EOF\nstatus: $(pkill -f node)\nEOF')],
+  [null, bash("cat > notes.md <<'EOF'\nstatus: $(pkill -f node)\nEOF")],
+  [null, bash('echo "pkill -f node"')],
+  [null, bash('grep -n "pkill" docs/method.md')],
+  ['secret-file-read', bash('cat .env .env.example')],
+  ['secret-file-read', bash('tripwires peek .env; cat .env')],
+  [null, bash('cp a b; echo "netlify deploy --prod"')],
+  [null, bash('wrangler deploy --dry-run')],
+  [null, bash('mv a.html x.html && echo "then: netlify deploy --prod"')],
+  ['weekday-date-mismatch', run('apply_patch', { command: '*** Begin Patch\n*** Update File: site/page.html\n@@\n-old\n+Doors open Saturday, October 11, 2026\n*** End Patch' })],
+  [null, run('apply_patch', { command: '*** Begin Patch\n*** Update File: site/page.html\n@@\n-old\n+Doors open Sunday, October 11, 2026\n*** End Patch' })],
   // tmp-path-to-interpreter (win32)
   ['tmp-path-to-interpreter', bash('python send.py --payload "{\\"file\\": \\"/tmp/contact.json\\"}"')],
   ['tmp-path-to-interpreter', bash('node -e "require(\'fs\').readFileSync(\'/tmp/x.json\')"')],
@@ -160,7 +174,20 @@ test('deploy-burst: the second production deploy of the same target inside 30 mi
   assert.equal(await go(80), null);
   const fourth = await go(120);
   assert.equal(fourth && fourth.rule, 'deploy-burst');
-  assert.match(fourth.message, /3 production deploys today/);
+  assert.match(fourth.message, /3 production deploy attempts today/);
   assert.equal(await go(125, 'netlify deploy --dir public --site aaaa'), null);
   assert.equal(await go(130, 'TRIPWIRES_ALLOW=deploy-burst netlify deploy --prod --site aaaa'), null);
+});
+
+test('deploy-burst: a deploy denied by another rule is not recorded; `try` (probe) records nothing', async () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'tripwires-deploy2-'));
+  const cfg = { ...config, stateDir: state };
+  const go = (cmd, extra = {}) => evaluate({ tool_name: 'Bash', tool_input: { command: cmd }, cwd: '/srv/site', session_id: 'test' }, { rules, config: cfg, now: NOW, platform: 'linux', fsAccess: true, log: false, ...extra });
+  const denied = await go('python fix.py && netlify deploy --prod --site cccc');
+  assert.equal(denied.rule, 'edit-chained-with-deploy');
+  assert.ok(!fs.existsSync(path.join(state, 'deploys.jsonl')), 'nothing recorded for a denied call');
+  assert.equal(await go('netlify deploy --prod --site cccc', { probe: true }), null);
+  assert.ok(!fs.existsSync(path.join(state, 'deploys.jsonl')), 'probe records nothing');
+  assert.equal(await go('netlify deploy --prod --site cccc'), null, 'first real deploy passes');
+  assert.equal(fs.readFileSync(path.join(state, 'deploys.jsonl'), 'utf8').trim().split('\n').length, 1);
 });

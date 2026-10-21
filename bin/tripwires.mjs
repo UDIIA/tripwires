@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadConfig } from '../src/config.mjs';
+import { loadConfig, trustProject } from '../src/config.mjs';
 import { loadRules, evaluate, allowFile } from '../src/engine.mjs';
 import { runHook } from '../src/hook.mjs';
 import { install, uninstall, status, TARGETS } from '../src/install.mjs';
@@ -38,6 +38,7 @@ const HELP = `tripwires ${pkg.version}: guardrails that fire before the tool run
   tripwires report [--days 7] [--rule ID] [--samples 6] [--json] what fired, how often, verdict lines to fill in
   tripwires allow <rule-id> --because "<the person's words>"    one-shot pass for the next denial of that rule
   tripwires off <rule-id> | on <rule-id>                        switch a rule off/on in ~/.tripwires/config.json
+  tripwires trust [dir]                                         let this project's .tripwires.json load rule code
   tripwires new <rule-id> [--dir ./tripwires-rules]             scaffold a rule file and its test from the template
   tripwires peek <file> [--key a.b] [--max 400]                 read a credential file with every value masked
   tripwires pids <name>                                         list processes by name with PID and command line
@@ -81,6 +82,8 @@ async function main() {
       for (const s of status()) console.log(`${s.installed ? 'ON ' : 'off'} ${s.agent} ${s.scope}: ${s.file}${s.exists === 'invalid' ? ' (INVALID JSON)' : s.exists ? '' : ' (file absent)'}`);
       const rules = await loadRules(cfg);
       console.log(`rules: ${rules.filter((r) => !r.off).length} active, ${rules.filter((r) => r.off).length} off, ${rules.filter((r) => r.platforms && !r.platforms.includes(process.platform)).length} not for this platform`);
+      for (const e of rules.errors) console.log(`  FAILED TO LOAD ${e.file}: ${e.message}`);
+      for (const p of cfg.untrustedRules) console.log(`  NOT LOADED (project not trusted; run \`tripwires trust\` there): ${p}`);
       try {
         const st = fs.statSync(path.join(cfg.stateDir, 'log.jsonl'));
         console.log(`log: ${st.size} bytes`);
@@ -89,8 +92,14 @@ async function main() {
       }
       return;
     }
+    case 'trust': {
+      const dir = positional[0] ? path.resolve(positional[0]) : process.cwd();
+      const file = trustProject(dir);
+      console.log(`${dir} is trusted: its .tripwires.json may now load rule code (${file}). Rule files run inside the hook with your file and environment access; read them first.`);
+      return;
+    }
     case 'list': {
-      const rules = await loadRules(loadConfig());
+      const rules = await loadRules(loadConfig(), { strict: true });
       for (const r of rules) {
         const here = !r.platforms || r.platforms.includes(process.platform);
         console.log(`${r.off ? 'off ' : here ? 'ON  ' : 'n/a '} ${r.id}: ${r.title}`);
@@ -104,7 +113,7 @@ async function main() {
       const tool = opt('tool', 'Bash');
       const cwd = opt('cwd', process.cwd());
       process.env.TRIPWIRES_TEST = '1';
-      const r = await evaluate({ tool_name: tool, tool_input: tool === 'Read' ? { file_path: command } : { command }, cwd, session_id: 'try' }, { log: false });
+      const r = await evaluate({ tool_name: tool, tool_input: tool === 'Read' ? { file_path: command } : { command }, cwd, session_id: 'try' }, { log: false, probe: true });
       if (!r) {
         console.log('pass');
         return;
@@ -176,7 +185,7 @@ async function main() {
       }
       fs.writeFileSync(ruleFile, ruleTemplate(id));
       fs.writeFileSync(testFile, testTemplate(id));
-      console.log(`${ruleFile}\n${testFile}\n\nNext: fill in the incident (date, what happened, how often), write the denial from the real command, run \`node --test ${path.relative(process.cwd(), dir)}\`, then add "${path.relative(process.cwd(), dir).replace(/\\/g, '/')}" to "rules" in ~/.tripwires/config.json or .tripwires.json.`);
+      console.log(`${ruleFile}\n${testFile}\n\nNext: fill in the incident (date, what happened, how often), write the denial from the real command, run \`node --test ${path.relative(process.cwd(), dir)}\`, then add "${path.relative(process.cwd(), dir).replace(/\\/g, '/')}" to "rules" in ~/.tripwires/config.json (or in .tripwires.json plus \`tripwires trust\` here).`);
       return;
     }
     case 'peek': {
@@ -229,8 +238,11 @@ function listPids(name) {
     }
     return rows.map((p) => `${String(p.ProcessId).padStart(7)}  ppid ${String(p.ParentProcessId).padStart(6)}  ${p.Name}${me.has(p.ProcessId) ? '  (this tripwires process)' : ''}\n         ${String(p.CommandLine || '').slice(0, 160)}`).join('\n') || 'no match';
   }
-  const r = spawnSync('sh', ['-c', `ps -eo pid,ppid,etime,args | grep -i -- ${JSON.stringify(name)} | grep -v grep`], { encoding: 'utf8' });
-  return (r.stdout || '').trim() || 'no match';
+  // No shell: `ps` is run directly and filtered here, so the name cannot carry a command substitution.
+  const r = spawnSync('ps', ['-eo', 'pid,ppid,etime,args'], { encoding: 'utf8' });
+  const needle = name.toLowerCase();
+  const rows = (r.stdout || '').split('\n').slice(1).filter((l) => l.toLowerCase().includes(needle));
+  return rows.map((l) => (me.has(Number(l.trim().split(/\s+/)[0])) ? `${l}  (this tripwires process)` : l)).join('\n') || 'no match';
 }
 
 function ruleTemplate(id) {

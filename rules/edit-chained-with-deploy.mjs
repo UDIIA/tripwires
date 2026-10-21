@@ -1,4 +1,4 @@
-import { segments, withoutQuotes } from '../src/shell.mjs';
+import { segments, withoutQuotes, withoutComment } from '../src/shell.mjs';
 
 // Commands that publish. Each one may be preceded by other gates (a copy check, a smoke test) that deny the WHOLE
 // command line; when the edit sits in the same line, the edit silently never happens.
@@ -27,7 +27,8 @@ export default {
     'On 2026-10-02 and 2026-10-03 the agent ran `python fix_toml.py && netlify deploy --prod`. A publication gate denied the line because of the deploy; the edit in front of it never ran, nothing said so, and the next deploy went out without the fix. Twice.',
   check(input) {
     const segs = segments(input.command);
-    const i = segs.findIndex((s) => DEPLOY.test(s));
+    // The deploy has to be code: `echo "netlify deploy --prod"` and a trailing comment are text.
+    const i = segs.findIndex((s) => DEPLOY.test(withoutQuotes(withoutComment(s))));
     if (i <= 0) return null;
     for (let k = 0; k < i; k++) {
       const s = segs[k];

@@ -33,6 +33,22 @@ test('install merges into Claude settings.json without touching other hooks, ide
   assert.equal(after.hooks.Stop.length, 1);
 });
 
+test('a group that holds our handler and someone else\'s keeps theirs on install and uninstall', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'tripwires-mixed-'));
+  const file = TARGETS.claude.project(cwd);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const theirs = { type: 'command', command: 'node their-hook.mjs' };
+  const stale = { type: 'command', command: '"/old/node" "/old/tripwires/bin/tripwires.mjs" hook --agent claude' };
+  fs.writeFileSync(file, JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [theirs, stale] }] } }));
+  install('claude', { scope: 'project', cwd });
+  let j = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(j.hooks.PreToolUse[0], { matcher: 'Bash', hooks: [theirs] });
+  assert.equal(j.hooks.PreToolUse.length, 3);
+  uninstall('claude', { scope: 'project', cwd });
+  j = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(j.hooks.PreToolUse, [{ matcher: 'Bash', hooks: [theirs] }]);
+});
+
 test('install creates Codex hooks.json under the "hooks" key with commandWindows; dry-run writes nothing', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'tripwires-codex-'));
   const file = TARGETS.codex.project(cwd);

@@ -8,7 +8,7 @@ Guardrails that fire before the tool runs. For Claude Code and Codex CLI.
 
 You wrote "never kill a process by name" in `CLAUDE.md`. The agent did it again on Thursday and took down its own shell. You wrote "never read `.env` whole" in `AGENTS.md`. It ran `cat .env` the next week and the key is now in a transcript.
 
-A rule in a prompt is advice. A rule in a `PreToolUse` hook is a wall. tripwires is the wall, with four things attached to every rule: the incident that caused it, the fix the agent should use instead, a test built from the real command, and a weekly report that tells you whether the rule is helping or hurting.
+A rule in a prompt is advice. A rule in a `PreToolUse` hook runs before the tool does and can say no. tripwires is that hook, with four things attached to every rule: the incident that caused it, the fix the agent should use instead, a test built from the real command, and a weekly report that tells you whether the rule is helping or hurting. It is a guardrail for an agent that forgets, not a sandbox for one that is trying to get around you; [SECURITY.md](SECURITY.md) says where that line is.
 
 ```
 $ tripwires try "pkill -f node"
@@ -19,7 +19,7 @@ Fix: List first, then kill one PID: `tripwires pids <name>` (or `tasklist /FI "I
 Override (visible, logged): add TRIPWIRES_ALLOW=kill-by-name to the command, or run `tripwires allow kill-by-name --because "<the person's own words>"` for a one-shot pass.
 ```
 
-The agent reads that text instead of running the command. The denial names what it was about to do, why that is the mistake, and the exact thing to do instead. Retrying with a cosmetic variation lands on the same wall.
+The agent reads that text instead of running the command. The denial names what it was about to do, why that is the mistake, and the exact thing to do instead. A retry with a cosmetic variation hits the same rule as long as the rule covers the variation; the ones it misses go into the rule's tests, which is what the weekly report is for.
 
 ## Install
 
@@ -95,9 +95,11 @@ export default {
 Point the config at the folder and the rule is live:
 
 ```json
-// ~/.tripwires/config.json  (or .tripwires.json at the repo root)
+// ~/.tripwires/config.json  (or .tripwires.json at the repo root, after `tripwires trust` in that repo)
 { "rules": ["./tripwires-rules"], "off": [] }
 ```
+
+A rule file is code that runs inside the hook, with your file and environment access. A `.tripwires.json` found in a cloned repository therefore cannot load rule code until you run `tripwires trust` in that project; its `off` list applies without trust, since switching a rule off runs nothing.
 
 Two habits make the difference between a rule that lasts and one that gets deleted in a week:
 
@@ -108,11 +110,11 @@ Two habits make the difference between a rule that lasts and one that gets delet
 
 Every override is visible in the command and recorded in the log, so the weekly report shows where the rule was wrong or where the person decided it did not apply this time.
 
-- `TRIPWIRES_ALLOW=<rule-id> <command>` passes that one command.
-- `tripwires allow <rule-id> --because "<the person's own words>"` writes a one-shot pass consumed by the next denial. The words go into the log next to it. The point is that the agent cannot invent the authorization; it has to come from the person.
+- `TRIPWIRES_ALLOW=<rule-id> <command>` passes that one command. It only counts where an environment assignment goes, at the start of the command; the same text in a comment or a string does nothing.
+- `tripwires allow <rule-id> --because "<the person's own words>"` writes a one-shot pass consumed by the next denial. The words go into the log next to it. Nothing stops an agent from typing a reason itself; what this gives you is that every pass is in the report with its justification, so an invented one is a sentence you can read on Monday.
 - `tripwires off <rule-id>` / `on` switch a rule off in the config. Write down why; a rule switched off without a reason comes back as the same incident.
 
-The log is `~/.tripwires/log.jsonl`: one line per denial, override or rule error, with the rule, the tool, the session, a 200-character excerpt and the milliseconds the agent waited.
+The log is `~/.tripwires/log.jsonl`: one line per denial, override or rule error (a call that passes writes nothing), with the rule, the tool, the session, a redacted 200-character excerpt and the milliseconds from hook start to that decision.
 
 ## The weekly report
 
@@ -144,10 +146,11 @@ Anything else that speaks this protocol can run `tripwires hook` as its command.
 ## Design rules
 
 - **Fails open.** A rule that throws is skipped and logged. The engine crashing lets the call through. A guardrail that breaks the session gets uninstalled within a day, and then it protects nothing. `TRIPWIRES_FAIL_CLOSED=1` flips this for CI.
-- **Never denies a read on its own.** Rules look at what the agent is about to change, send or spend. The one exception is reading a credential file whole, and that denial hands over `tripwires peek`, a reader that masks every value.
-- **Data is not code.** A heredoc written to a file is not a command. A string that mentions `Set-Content` is not an invocation. The parsing helpers exist so rules do not block the notes file that describes the incident.
-- **Each matched tool call costs one Node start-up plus the rules.** Measured on a loaded Windows laptop: about 200 ms above bare `node -e 0` (which itself took 650 to 900 ms there; an idle machine starts Node in under 100 ms). Tools the rules do not care about never start the process. The log records the milliseconds of every decision and `tripwires report` shows p50 per rule, so a slow rule is visible.
-- **The override is loud.** It is in the command text or in a file written by a person, and it ends up in the log either way.
+- **Never denies a read on its own.** Rules look at what the agent is about to change, send or spend. The one exception is reading a credential file whole, and that denial hands over `tripwires peek`, a reader that prints value shapes instead of values (with the limits listed in [SECURITY.md](SECURITY.md)).
+- **Data is not code.** A heredoc written to a file is not a command, unless it is unquoted and carries a `$(...)` the shell will run. A string that mentions `Set-Content` is not an invocation. A trailing `# comment` is not an override. The parsing helpers exist so rules do not block the notes file that describes the incident, and so the notes file cannot smuggle a command.
+- **Each matched tool call costs one Node start-up plus the rules.** Measured with [`bench/latency.mjs`](bench/latency.mjs) on a loaded Windows laptop: about 200 ms above bare `node -e 0` (which itself took 650 to 900 ms there; an idle machine starts Node in under 100 ms). Tools the rules do not care about never start the process. The log carries the milliseconds from hook start to each denial, and `tripwires report` shows p50 per rule; it is the wait the agent saw on denials, not a per-rule profile.
+- **The override is loud.** It is at the head of the command text or in a file written through the CLI with a reason, and it ends up in the log either way.
+- **Rule loading is isolated.** A rule file that fails to import is reported by `tripwires doctor`, logged, and skipped; the other rules still run.
 
 ## Contributing
 

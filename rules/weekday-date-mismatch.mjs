@@ -95,12 +95,12 @@ const INTERNAL_FILE = /(?:\.test\.[cm]?js|\.jsonl|\.log|\.csv|CHANGELOG\.md)$/i;
 export default {
   id: 'weekday-date-mismatch',
   title: 'Weekday does not match the date',
-  tools: /^(?:Bash|PowerShell|mcp__windows-mcp__PowerShell|Write|Edit|MultiEdit)$/,
+  tools: /^(?:Bash|PowerShell|mcp__windows-mcp__PowerShell|Write|Edit|MultiEdit|apply_patch)$/,
   incident:
     'On 2026-10-08 a deadline went out in 13 places of a customer-facing page and message set as a Saturday; the date was a Sunday. Only a blind second review caught it. A replay over 37 days of transcripts found the same error in 27 sessions, almost always last year\'s calendar applied to this year.',
   check(input, ctx) {
     let text = '';
-    if (input.tool === 'Write' || input.tool === 'Edit' || input.tool === 'MultiEdit') {
+    if (input.tool === 'Write' || input.tool === 'Edit' || input.tool === 'MultiEdit' || input.tool === 'apply_patch') {
       if (INTERNAL_FILE.test(input.file)) return null;
       text = input.text;
     } else {
