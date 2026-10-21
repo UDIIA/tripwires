@@ -14,7 +14,8 @@ const HOME = os.homedir();
 const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'tripwires.mjs');
 
 export const TARGETS = {
-  claude: { global: path.join(HOME, '.claude', 'settings.json'), project: (cwd) => path.join(cwd, '.claude', 'settings.json'), key: 'hooks' },
+  // Claude Code reads its settings from CLAUDE_CONFIG_DIR when it is set (one directory per account), so install there.
+  claude: { global: path.join(process.env.CLAUDE_CONFIG_DIR ? path.resolve(process.env.CLAUDE_CONFIG_DIR) : path.join(HOME, '.claude'), 'settings.json'), project: (cwd) => path.join(cwd, '.claude', 'settings.json'), key: 'hooks' },
   codex: { global: path.join(HOME, '.codex', 'hooks.json'), project: (cwd) => path.join(cwd, '.codex', 'hooks.json'), key: 'hooks' },
 };
 
