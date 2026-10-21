@@ -1,0 +1,48 @@
+{
+  "name": "tripwires",
+  "version": "0.1.0",
+  "description": "Turn the mistakes your coding agent keeps repeating into guardrails that fire before the tool runs. PreToolUse hooks for Claude Code and Codex CLI, with the incident, the fix, a test and a weekly verdict attached to every rule.",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "hooks",
+    "pretooluse",
+    "guardrails",
+    "coding-agent",
+    "agent-safety",
+    "ai-agents"
+  ],
+  "license": "MIT",
+  "author": "UDIIA",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/UDIIA/tripwires.git"
+  },
+  "bugs": "https://github.com/UDIIA/tripwires/issues",
+  "homepage": "https://github.com/UDIIA/tripwires#readme",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "bin": {
+    "tripwires": "bin/tripwires.mjs"
+  },
+  "exports": {
+    ".": "./src/engine.mjs",
+    "./shell": "./src/shell.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "rules",
+    "examples",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "lint": "node --check bin/tripwires.mjs && node -e \"import('./src/engine.mjs').then(m=>m.loadRules()).then(r=>console.log(r.length+' rules load'))\""
+  }
+}
