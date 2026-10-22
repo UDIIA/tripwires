@@ -186,7 +186,8 @@ test('peek prints shapes, not values: numbers, bearer tokens in structural keys,
 });
 
 test('hook entry point: denies through stdout JSON, lets unknown payloads through, fails open on garbage', () => {
-  const env = { ...process.env, TRIPWIRES_TEST: '1', TRIPWIRES_STATE_DIR: tmp };
+  // A config path that does not exist keeps the machine's own ~/.tripwires/config.json out of the subprocess.
+  const env = { ...process.env, TRIPWIRES_TEST: '1', TRIPWIRES_STATE_DIR: tmp, TRIPWIRES_CONFIG: path.join(tmp, 'no-user-config.json') };
   const call = (input) => spawnSync(process.execPath, [BIN, 'hook', '--agent', 'claude'], { input, encoding: 'utf8', env, windowsHide: true });
   const deny = call(JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'pkill -f node' }, cwd: tmp, session_id: 'hook-test' }));
   assert.equal(deny.status, 0);
@@ -203,7 +204,8 @@ test('hook entry point: denies through stdout JSON, lets unknown payloads throug
 });
 
 test('CLI: try, list, new, report run', () => {
-  const env = { ...process.env, TRIPWIRES_TEST: '1', TRIPWIRES_STATE_DIR: tmp };
+  // A config path that does not exist keeps the machine's own ~/.tripwires/config.json out of the subprocess.
+  const env = { ...process.env, TRIPWIRES_TEST: '1', TRIPWIRES_STATE_DIR: tmp, TRIPWIRES_CONFIG: path.join(tmp, 'no-user-config.json') };
   const cli = (...args) => spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env, cwd: tmp, windowsHide: true });
   const t = cli('try', 'taskkill /IM node.exe /F');
   assert.equal(t.status, 1);

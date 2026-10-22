@@ -4,14 +4,23 @@ import { segments, tokens, withoutQuotes, withoutComment } from '../src/shell.mj
 
 // Production deploys cost money or quota (Netlify bills credits per deploy; Vercel and Cloudflare meter builds),
 // and a burst of them is almost always an agent iterating on a live site instead of on a preview.
+// Netlify is reached four ways besides the plain CLI name: the CLI's own entry file run by node (what a shell without
+// the .cmd shim uses, often through a variable such as `node $run deploy --prod`), npx, the CLI's raw API command,
+// and the HTTP API itself (a deploy, a build, a build hook). Each one publishes to production and costs credits.
+const NETLIFY_API_URL = /api\.netlify\.com\/(?:api\/v1\/sites\/[^/\s]+\/(?:deploys|builds)|build_hooks\/[^/\s?]+)(?:[/?\s]|$)/i;
+const HTTP_WRITE = /(?:^|\s)(?:-X\s*POST|--request\s+POST|-d\b|--data(?:-binary|-raw)?\b|-F\b|--form\b|--upload-file\b|-T\b|-Method\s+Post\b)/i;
 const PROD_DEPLOY = [
-  { host: 'netlify', rx: /(?:^|[\s"'`&(\\/])(?:netlify(?:\.cmd|\.exe)?|ntl)["']?\s+(?:--?[\w-]+(?:[=\s]+[^\s-][^\s]*)?\s+)*?deploy\b[^\n]*(?:^|\s)--prod(?:-if-unlocked)?(?:\s|$|=true)/i },
+  { host: 'netlify', rx: /(?:^|[\s"'`&(\\/])(?:netlify(?:-cli)?(?:\.cmd|\.exe)?|ntl)["']?\s+(?:--?[\w-]+(?:[=\s]+[^\s-][^\s]*)?\s+)*?deploy\b[^\n]*(?:^|\s)--prod(?:-if-unlocked)?(?:\s|$|=true)/i },
+  { host: 'netlify', rx: /(?:^|[\s"'`&(\\/])node(?:\.exe)?["']?\s+["']?(?:[^\s"']*netlify-cli[\\/]+bin[\\/]+run(?:\.js)?|\$\{?\w*(?:run|netlify)\w*\}?)["']?\s+deploy\b[^\n]*(?:^|\s)--prod(?:-if-unlocked)?(?:\s|$|=true)/i },
+  { host: 'netlify', rx: /(?:^|[\s"'`&(\\/])(?:netlify(?:-cli)?(?:\.cmd|\.exe)?|ntl|node(?:\.exe)?\s+\S+)["']?\s+api\s+createSiteDeploy\b/i, api: true },
+  { host: 'netlify', test: (s) => NETLIFY_API_URL.test(s) && /(?:^|[\s"'`&(\\/])(?:curl(?:\.exe)?|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr|http|xh)\b/i.test(s) && HTTP_WRITE.test(s), api: true },
   { host: 'vercel', rx: /(?:^|[\s"'`&(\\/])vercel(?:\.cmd)?["']?\s+(?:deploy\s+)?[^\n]*(?:^|\s)--prod\b/i },
   { host: 'wrangler', rx: /(?:^|[\s"'`&(\\/])wrangler["']?\s+(?:deploy|publish|pages\s+deploy)\b/i },
   { host: 'firebase', rx: /(?:^|[\s"'`&(\\/])firebase["']?\s+deploy\b/i },
   { host: 'fly', rx: /(?:^|[\s"'`&(\\/])fly(?:ctl)?["']?\s+deploy\b/i },
 ];
-const NOT_A_DEPLOY = /--dry-run\b|--help\b|\s-h\b/i;
+// `-h` is matched case-sensitively: curl's `-H` (a header) sits on most API deploys and is not a help flag.
+const NOT_A_DEPLOY = { test: (s) => /--dry-run\b|--help\b/i.test(s) || /\s-h(?:\s|$)/.test(s) };
 const ONLY_TEXT = /^\s*(?:echo|printf|grep|rg|cat|sed|awk|head|tail|less|type|git|Write-Output|Write-Host|#|:)\b/i;
 
 export const LIMITS = { windowMinutes: 30, perTargetPerDay: 3, perDay: 25 };
@@ -21,13 +30,20 @@ function findDeploy(command) {
     const seg = withoutComment(raw);
     if (ONLY_TEXT.test(seg) || NOT_A_DEPLOY.test(seg)) continue;
     const bare = withoutQuotes(seg);
-    const p = PROD_DEPLOY.find((d) => d.rx.test(bare));
-    if (p) return { seg, host: p.host };
+    const p = PROD_DEPLOY.find((d) => (d.test ? d.test(bare) : d.rx.test(bare)));
+    if (p) return { seg, host: p.host, api: !!p.api };
   }
   return null;
 }
 
-function target(seg, host, cwd) {
+function target(seg, host, cwd, api = false) {
+  if (api) {
+    // The API names the site in the URL or in the JSON body; a build hook is its own target.
+    const bare = withoutQuotes(seg);
+    // The JSON body sits inside quotes, which withoutQuotes blanks, so site_id is read from the raw segment.
+    const m = bare.match(/\/sites\/([^/\s"']+)\//i) || seg.match(/site_id\W+([\w.-]+)/i) || bare.match(/build_hooks\/([^/\s?"']+)/i);
+    if (m) return `${host}:${m[1]}`;
+  }
   const tk = tokens(seg);
   for (let i = 0; i < tk.length; i++) {
     const m = tk[i].v.match(/^(?:--site|-s|--project|--name|--app|-a)(?:=(.+))?$/);
@@ -55,7 +71,7 @@ export default {
   check(input, ctx) {
     const d = findDeploy(input.command);
     if (!d) return null;
-    const key = target(d.seg, d.host, input.cwd);
+    const key = target(d.seg, d.host, input.cwd, d.api);
     const now = ctx.now || new Date();
     const rows = ctx.fs === false ? [] : readDeploys(stateFile(ctx));
     const today = now.toISOString().slice(0, 10);
@@ -81,6 +97,6 @@ export default {
     const d = findDeploy(input.command);
     if (!d) return;
     fs.mkdirSync(ctx.stateDir, { recursive: true });
-    fs.appendFileSync(stateFile(ctx), JSON.stringify({ ts: (ctx.now || new Date()).toISOString(), target: target(d.seg, d.host, input.cwd), host: d.host, session: input.session }) + '\n');
+    fs.appendFileSync(stateFile(ctx), JSON.stringify({ ts: (ctx.now || new Date()).toISOString(), target: target(d.seg, d.host, input.cwd, d.api), host: d.host, session: input.session }) + '\n');
   },
 };

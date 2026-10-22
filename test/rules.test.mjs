@@ -191,3 +191,39 @@ test('deploy-burst: a deploy denied by another rule is not recorded; `try` (prob
   assert.equal(await go('netlify deploy --prod --site cccc'), null, 'first real deploy passes');
   assert.equal(fs.readFileSync(path.join(state, 'deploys.jsonl'), 'utf8').trim().split('\n').length, 1);
 });
+
+test('deploy-burst: the other ways to publish on Netlify count too (node entry file, npx, API, build hook)', async () => {
+  const forms = [
+    ['node C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\netlify-cli\\bin\\run.js deploy --prod --no-build --dir public --site s1', 'netlify:s1'],
+    ['node $run deploy --prod --no-build --dir "$proj\\public" --site s2', 'netlify:s2'],
+    ['npx netlify-cli deploy --prod --dir dist --site s3', 'netlify:s3'],
+    ['netlify api createSiteDeploy --data \'{"site_id":"s4","body":{}}\'', 'netlify:s4'],
+    ['curl -s -X POST -H "Authorization: Bearer $T" https://api.netlify.com/api/v1/sites/s5/deploys -d @files.json', 'netlify:s5'],
+    ['curl -X POST -d {} https://api.netlify.com/build_hooks/hook6', 'netlify:hook6'],
+    ['Invoke-RestMethod -Method Post -Uri https://api.netlify.com/api/v1/sites/s7/builds', 'netlify:s7'],
+  ];
+  for (const [cmd, key] of forms) {
+    const state = fs.mkdtempSync(path.join(os.tmpdir(), 'tripwires-deploy3-'));
+    const cfg = { ...config, stateDir: state };
+    const go = (minutes) => evaluate({ tool_name: 'Bash', tool_input: { command: cmd }, cwd: '/srv/site', session_id: 'test' }, { rules, config: cfg, now: new Date(NOW.getTime() + minutes * 60000), platform: 'linux', fsAccess: true, log: false });
+    assert.equal(await go(0), null, `first passes: ${cmd}`);
+    assert.ok(fs.existsSync(path.join(state, 'deploys.jsonl')), `recorded as a deploy: ${cmd}`);
+    const row = JSON.parse(fs.readFileSync(path.join(state, 'deploys.jsonl'), 'utf8').trim());
+    assert.equal(row.target, key, `target of: ${cmd}`);
+    const second = await go(5);
+    assert.equal(second && second.rule, 'deploy-burst', `second inside 30 min denied: ${cmd}`);
+  }
+});
+
+test('deploy-burst: reading the Netlify API or deploying a preview is not a production deploy', async () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'tripwires-deploy4-'));
+  const cfg = { ...config, stateDir: state };
+  const go = (cmd) => evaluate({ tool_name: 'Bash', tool_input: { command: cmd }, cwd: '/srv/site', session_id: 'test' }, { rules, config: cfg, now: NOW, platform: 'linux', fsAccess: true, log: false });
+  for (const cmd of [
+    'curl -s -H "Authorization: Bearer $T" https://api.netlify.com/api/v1/sites/s1/deploys?per_page=3',
+    'netlify api listSiteDeploys --data \'{"site_id":"s1"}\'',
+    'node $run deploy --no-build --dir public --site s1',
+    'node C:\\npm\\node_modules\\netlify-cli\\bin\\run.js deploy --dir public --site s1',
+  ]) assert.equal(await go(cmd), null, cmd);
+  assert.ok(!fs.existsSync(path.join(state, 'deploys.jsonl')), 'nothing recorded');
+});
