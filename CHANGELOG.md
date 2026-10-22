@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 (unreleased)
+
+- `deploy-burst`: production deploys to Netlify are counted on every path that publishes, not only `netlify deploy --prod`: the CLI entry file run by node (`node …/netlify-cli/bin/run.js deploy --prod`, `node $run deploy --prod`), `npx netlify-cli`, `netlify api createSiteDeploy`, and the HTTP API (site deploys, builds, build hooks) through curl, wget, `Invoke-RestMethod` and `Invoke-WebRequest` when the call writes. Measured on one account over 30 days: the most used production path was the node entry file, which 0.1.1 did not see.
+- `deploy-burst`: `-h` counts as a help flag only in lower case; curl’s `-H` header no longer makes an API deploy look like `--help`.
+- `tripwires init --claude` installs into `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set (one settings directory per account).
+- Tests: the hook and CLI subprocess tests no longer read the machine’s own `~/.tripwires/config.json`, which made them fail on a machine that runs tripwires with rules switched off.
+- Releases publish to npm from GitHub Actions through trusted publishing (no token stored).
+
 ## 0.1.1 (2026-10-21)
 
 Fixes from a blind review of 0.1.0 (fifteen findings, all reproduced before the fix, each now a test):

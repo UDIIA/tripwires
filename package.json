@@ -1,6 +1,6 @@
 {
   "name": "tripwires",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Turn the mistakes your coding agent keeps repeating into guardrails that fire before the tool runs. PreToolUse hooks for Claude Code and Codex CLI, with the incident, the fix, a test and a weekly verdict attached to every rule.",
   "keywords": [
     "claude-code",
