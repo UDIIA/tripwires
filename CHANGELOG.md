@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.2 (unreleased)
+## 0.1.2 (2026-10-22)
 
 - `deploy-burst`: production deploys to Netlify are counted on every path that publishes, not only `netlify deploy --prod`: the CLI entry file run by node (`node …/netlify-cli/bin/run.js deploy --prod`, `node $run deploy --prod`), `npx netlify-cli`, `netlify api createSiteDeploy`, and the HTTP API (site deploys, builds, build hooks) through curl, wget, `Invoke-RestMethod` and `Invoke-WebRequest` when the call writes. Measured on one account over 30 days: the most used production path was the node entry file, which 0.1.1 did not see.
 - `deploy-burst`: `-h` counts as a help flag only in lower case; curl’s `-H` header no longer makes an API deploy look like `--help`.
